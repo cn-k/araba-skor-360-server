@@ -1,0 +1,316 @@
+openapi: 3.0.3
+info:
+  title: Araba Skor 360 API
+  description: >
+    Önceden hesaplanmış araç skorlarını sunar; kullanıcıların araçlara 1-100 arası
+    skor ve serbest metin yorum girmesine izin verir. Korumalı uçlar,
+    user-platform-service tarafından doğrulanan bir Firebase ID token
+    (`Authorization: Bearer <token>`) bekler.
+  version: "0.1.0"
+servers:
+  - url: http://localhost:7070
+tags:
+  - name: Cars
+  - name: Reviews
+paths:
+  /health:
+    get:
+      summary: Sağlık kontrolü
+      operationId: health
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /api/cars:
+    get:
+      tags: [Cars]
+      summary: Araçları listele
+      operationId: listCars
+      parameters:
+        - name: q
+          in: query
+          description: Marka/model üzerinde serbest metin arama
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Araç listesi
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Car"
+
+  /api/cars/{id}:
+    get:
+      tags: [Cars]
+      summary: Araç detayı
+      operationId: getCar
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+      responses:
+        "200":
+          description: Araç
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Car"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/cars/{id}/reviews:
+    get:
+      tags: [Reviews]
+      summary: Araca ait kullanıcı skor/yorumlarını listele
+      operationId: listReviews
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Review listesi (en yeni önce)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Review"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      tags: [Reviews]
+      summary: Skor + yorum gönder ya da güncelle (upsert)
+      description: >
+        Kullanıcı başına araç başına tek kayıt tutulur; aynı kullanıcı tekrar
+        gönderirse mevcut kaydı günceller. user-platform-service üzerindeki
+        `daily_reviews` kullanım kotasını tüketir (limit aşılırsa 429 döner).
+      operationId: upsertReview
+      security:
+        - firebaseAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReviewRequest"
+      responses:
+        "200":
+          description: Kaydedilen review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          description: Günlük kota aşıldı
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/cars/{id}/reviews/me:
+    get:
+      tags: [Reviews]
+      summary: Giriş yapmış kullanıcının bu araca ait review'ı
+      operationId: getMyReview
+      security:
+        - firebaseAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+      responses:
+        "200":
+          description: Review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      tags: [Reviews]
+      summary: Giriş yapmış kullanıcının review'ını sil
+      operationId: deleteMyReview
+      security:
+        - firebaseAuth: []
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+      responses:
+        "204":
+          description: Silindi
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    firebaseAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID token (client-side login sonrası alınır, user-platform-service üzerinden doğrulanır).
+
+  parameters:
+    CarId:
+      name: id
+      in: path
+      required: true
+      description: model_variant.id
+      schema:
+        type: integer
+
+  responses:
+    NotFound:
+      description: Bulunamadı
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Geçersiz istek
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Unauthorized:
+      description: Eksik/geçersiz Authorization header
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+    Car:
+      type: object
+      properties:
+        id:
+          type: integer
+        make:
+          type: string
+        model:
+          type: string
+        generation:
+          type: string
+          nullable: true
+        yearStart:
+          type: integer
+        yearEnd:
+          type: integer
+        trName:
+          type: string
+          nullable: true
+        score:
+          type: number
+          format: double
+          nullable: true
+          description: Önceden hesaplanmış model skoru (model_variant_score.score)
+        confidence:
+          type: string
+          nullable: true
+          enum: [Low, Medium, High]
+        sampleSize:
+          type: integer
+          nullable: true
+        nhtsaCovered:
+          type: boolean
+          nullable: true
+        recallCount:
+          type: integer
+          nullable: true
+        communityScore:
+          type: number
+          format: double
+          nullable: true
+          description: Kullanıcı review'larının ortalaması (1-100)
+        communityReviewCount:
+          type: integer
+
+    ReviewRequest:
+      type: object
+      required: [score]
+      properties:
+        score:
+          type: integer
+          minimum: 1
+          maximum: 100
+        comment:
+          type: string
+          nullable: true
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        modelVariantId:
+          type: integer
+        userId:
+          type: string
+          description: user-platform-service kullanıcı UUID'si
+        displayName:
+          type: string
+          nullable: true
+        avatarUrl:
+          type: string
+          nullable: true
+        score:
+          type: integer
+        comment:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
