@@ -1,5 +1,6 @@
 .gradle/
 build/
 .env
+.claude/skills/*/.token-cache.json
 *.iml
 .idea/

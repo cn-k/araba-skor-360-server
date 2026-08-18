@@ -11,6 +11,7 @@ servers:
   - url: http://localhost:7070
 tags:
   - name: Cars
+  - name: Cost of Ownership
   - name: Reviews
 paths:
   /health:
@@ -80,6 +81,52 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  /api/cars/{id}/cost-of-ownership:
+    get:
+      tags: [Cost of Ownership]
+      summary: Yıllık yürütme maliyeti (MTV + yakıt) — 0-100 skordan tamamen ayrı bir eksen
+      description: >
+        `score`'un aksine önceden hesaplanmış tek bir sayı değil: MTV ve yakıt maliyeti
+        aracın gerçek tescil yılına ve yıllık km'sine bağlı olarak canlı hesaplanır. Bir
+        model_variant genelde birden çok motor/yakıt seçeneği (VCA trim'i) içerdiğinden
+        `options` bir liste döner; NEDC ve WLTP test metodolojisine ait satırlar asla
+        birbirine karıştırılmaz, her option kendi `testingScheme`'ini taşır. `mtv`/`fuel`
+        alanları veri eşleşmezse (örn. elektrikli araçlar, henüz kW bazlı MTV tarifesi
+        transcribe edilmedi) `null` döner — sessizce yanlış bir sayı üretmek yerine
+        `notes` içinde açıklanır.
+      operationId: getCostOfOwnership
+      parameters:
+        - $ref: "#/components/parameters/CarId"
+        - name: registrationYear
+          in: query
+          description: Aracın gerçek tescil yılı. Verilmezse model_variant.yearStart kullanılır (yaklaşık değer).
+          schema:
+            type: integer
+        - name: annualKm
+          in: query
+          description: Yıllık ortalama km. Verilmezse 15000.
+          schema:
+            type: integer
+            default: 15000
+        - name: trValueTl
+          in: query
+          description: >
+            2018+ araçlar için MTV "taşıt değeri" bandı (TL). Verilmezse en üst değer bandı
+            varsayılır — 2018 öncesi (tarife I/A) araçlarda bu parametrenin etkisi yoktur.
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Yıllık yürütme maliyeti seçenekleri
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CostOfOwnership"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
   /api/cars/{id}/reviews:
     get:
       tags: [Reviews]
@@ -116,8 +163,11 @@ paths:
       summary: Skor + yorum gönder ya da güncelle (upsert)
       description: >
         Kullanıcı başına araç başına tek kayıt tutulur; aynı kullanıcı tekrar
-        gönderirse mevcut kaydı günceller. user-platform-service üzerindeki
-        `daily_reviews` kullanım kotasını tüketir (limit aşılırsa 429 döner).
+        gönderirse mevcut kaydı günceller. `score` (genel memnuniyet) tek zorunlu alan;
+        interiorQualityScore/powertrainHarmonyScore/nvhScore/rideComfortScore opsiyonel
+        detay kategorileri — kullanıcı doldurmak istemezse boş bırakılabilir.
+        user-platform-service üzerindeki `daily_reviews` kullanım kotasını tüketir
+        (limit aşılırsa 429 döner).
       operationId: upsertReview
       security:
         - firebaseAuth: []
@@ -273,6 +323,205 @@ components:
           description: Kullanıcı review'larının ortalaması (1-100)
         communityReviewCount:
           type: integer
+        communityCategoryScores:
+          $ref: "#/components/schemas/CommunityCategoryScores"
+          description: >
+            Review'lardaki opsiyonel detay kategorilerinin (bkz. ReviewRequest) topluluk
+            ortalamaları. Her kategori kendi count'unu taşır çünkü kategoriler opsiyonel —
+            communityReviewCount ile aynı örneklem büyüklüğüne dayandığı varsayılmamalı.
+        ncapRating:
+          $ref: "#/components/schemas/NcapRating"
+          nullable: true
+          description: Önceden hesaplanmış (elle araştırılmış) Euro NCAP puanı — hem listede hem detayda dolu
+        costOfOwnership:
+          $ref: "#/components/schemas/CostOfOwnership"
+          nullable: true
+          description: >
+            Sadece GET /api/cars/{id} (tekil detay) cevabında dolu — GET /api/cars listesinde
+            her satır için ekstra DB sorgusu yapmamak adına burada her zaman null'dır.
+            Varsayılan parametrelerle (registrationYear=yearStart, annualKm=15000) hesaplanır;
+            gerçek bir alıcının aracına göre özelleştirmek için doğrudan
+            GET /api/cars/{id}/cost-of-ownership kullanılmalı.
+
+    CommunityCategoryScores:
+      type: object
+      properties:
+        interiorQualityScore:
+          type: number
+          nullable: true
+        interiorQualityCount:
+          type: integer
+        powertrainHarmonyScore:
+          type: number
+          nullable: true
+        powertrainHarmonyCount:
+          type: integer
+        nvhScore:
+          type: number
+          nullable: true
+        nvhCount:
+          type: integer
+        rideComfortScore:
+          type: number
+          nullable: true
+        rideComfortCount:
+          type: integer
+
+    NcapRating:
+      type: object
+      properties:
+        stars:
+          type: number
+          description: 0-5 arası Euro NCAP yıldız derecesi
+        adultOccupantPct:
+          type: number
+          nullable: true
+          description: Yetişkin yolcu koruması (%) — bazı eski testlerde kaynak doğrulanamadığı için null olabilir
+        childOccupantPct:
+          type: number
+          nullable: true
+        vruPct:
+          type: number
+          nullable: true
+          description: "Vulnerable Road User (yaya/bisikletli) koruması (%)"
+        safetyAssistPct:
+          type: number
+          nullable: true
+        testYear:
+          type: integer
+        source:
+          type: string
+          description: Kaynak/doğrulama notu (elle araştırılmış veri, kaynağı izlenebilir tutmak için)
+        notes:
+          type: string
+          nullable: true
+
+    CostOfOwnership:
+      type: object
+      properties:
+        modelVariantId:
+          type: integer
+        registrationYear:
+          type: integer
+        ageYears:
+          type: integer
+        asOfYear:
+          type: integer
+        annualKm:
+          type: integer
+        options:
+          type: array
+          items:
+            $ref: "#/components/schemas/CostOption"
+        kaskoDegerOptions:
+          type: array
+          items:
+            $ref: "#/components/schemas/KaskoDegerOption"
+          description: >
+            TSB'nin (Türkiye Sigorta Birliği) resmi aylık kasko değer listesinden, bu araç +
+            tescil yılına uyan trim'lerin GERÇEK değerleri (tahmin değil). Boş, tek, ya da
+            birden çok satır dönebilir — bir nesil birden fazla trim içerir, bu yüzden
+            tekil bir sayıya indirgenmez. Şu an sadece bilgi amaçlı: estimatedKaskoAnnualTl
+            ya da MTV değer bandı hesabına otomatik bağlanmıyor.
+        estimatedKaskoAnnualTl:
+          $ref: "#/components/schemas/EstimateRange"
+          nullable: true
+          description: >
+            Gerçek bir teklif DEĞİL — kaba bir aralık (araç değerinin %2-5'i). Sadece
+            trValueTl query param'ı verilmişse dolu; aracın değeri bilinmeden hesaplanamaz.
+        estimatedTrafficInsuranceAnnualTl:
+          $ref: "#/components/schemas/EstimateRange"
+          description: >
+            Gerçek bir teklif DEĞİL — bu araca özel değil, genel/jenerik bir aralık (hasar
+            basamağı, il, araç sınıfına göre gerçek fiyat bunun dışına da çıkabilir).
+        notes:
+          type: array
+          items:
+            type: string
+          description: Veri eksikliği/varsayım gibi durumlarda kullanıcıya gösterilecek açıklamalar
+
+    EstimateRange:
+      type: object
+      properties:
+        minTl:
+          type: number
+        maxTl:
+          type: number
+
+    KaskoDegerOption:
+      type: object
+      properties:
+        make:
+          type: string
+          description: "TSB'nin kendi marka string'i (ör. \"TOFAS-FIAT\"), bizim `make` alanımızla birebir aynı olmayabilir"
+        trim:
+          type: string
+          description: "TSB'nin trim açıklaması, ör. \"EGEA SEDAN URBAN PLUS 1.6 M.JET 120\""
+        modelYear:
+          type: integer
+        valueTl:
+          type: number
+        snapshotMonth:
+          type: string
+          format: date
+          description: Bu değerin ait olduğu TSB anlık görüntüsünün ayı (o ayın ilk günü)
+        source:
+          type: string
+
+    CostOption:
+      type: object
+      properties:
+        fuelType:
+          type: string
+          description: "VCA'daki ham yakıt tipi, ör. Petrol, Diesel, 'Petrol / LPG', Electricity"
+        testingScheme:
+          type: string
+          enum: [NEDC, WLTP]
+          description: NEDC ve WLTP karşılaştırılabilir değildir, bu yüzden asla harmanlanmaz
+        engineCc:
+          type: integer
+          nullable: true
+        literPer100km:
+          type: number
+          nullable: true
+        fuel:
+          $ref: "#/components/schemas/FuelCostInfo"
+          nullable: true
+        mtv:
+          $ref: "#/components/schemas/MtvInfo"
+          nullable: true
+        totalAnnualTl:
+          type: number
+          nullable: true
+          description: mtv.annualTl + fuel.annualCostTl (ikisi de doluysa)
+        note:
+          type: string
+          nullable: true
+
+    FuelCostInfo:
+      type: object
+      properties:
+        pricePerLiterTl:
+          type: number
+        observedAt:
+          type: string
+          format: date
+        annualCostTl:
+          type: number
+
+    MtvInfo:
+      type: object
+      properties:
+        tarife:
+          type: string
+          enum: ["I", "I/A"]
+        ageBracket:
+          type: string
+          enum: [age_1_3, age_4_6, age_7_11, age_12_15, age_16_plus]
+        annualTl:
+          type: number
+        effectiveYear:
+          type: integer
 
     ReviewRequest:
       type: object
@@ -282,6 +531,31 @@ components:
           type: integer
           minimum: 1
           maximum: 100
+          description: Genel memnuniyet — tek zorunlu puan, aşağıdaki kategoriler opsiyonel detay
+        interiorQualityScore:
+          type: integer
+          minimum: 1
+          maximum: 100
+          nullable: true
+          description: İç mekân kalitesi (malzeme, işçilik)
+        powertrainHarmonyScore:
+          type: integer
+          minimum: 1
+          maximum: 100
+          nullable: true
+          description: Motor-şanzıman uyumu
+        nvhScore:
+          type: integer
+          minimum: 1
+          maximum: 100
+          nullable: true
+          description: Ses yalıtımı (rüzgar/yol/motor sesi tek eksende — NVH)
+        rideComfortScore:
+          type: integer
+          minimum: 1
+          maximum: 100
+          nullable: true
+          description: Sürüş konforu (süspansiyon, yol tutuş hissi)
         comment:
           type: string
           nullable: true
@@ -305,6 +579,19 @@ components:
           nullable: true
         score:
           type: integer
+          description: Genel memnuniyet
+        interiorQualityScore:
+          type: integer
+          nullable: true
+        powertrainHarmonyScore:
+          type: integer
+          nullable: true
+        nvhScore:
+          type: integer
+          nullable: true
+        rideComfortScore:
+          type: integer
+          nullable: true
         comment:
           type: string
           nullable: true

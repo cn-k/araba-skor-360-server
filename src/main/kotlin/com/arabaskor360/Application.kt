@@ -6,6 +6,8 @@ import com.arabaskor360.common.BadRequestException
 import com.arabaskor360.common.NotFoundException
 import com.arabaskor360.common.sharedObjectMapper
 import com.arabaskor360.config.AppConfig
+import com.arabaskor360.cost.CostOfOwnershipController
+import com.arabaskor360.cost.CostOfOwnershipRepository
 import com.arabaskor360.db.AppDatabase
 import com.arabaskor360.reviews.ReviewController
 import io.javalin.Javalin
@@ -27,8 +29,12 @@ private fun loadOpenApiSpec(): String =
 fun main() {
     AppDatabase.init()
 
-    val carController = CarController()
+    // Shared across both controllers so there's a single FuelPriceCache instance (and thus a
+    // single daily external fuel-price fetch) for the whole process, not one per controller.
+    val costOfOwnershipRepository = CostOfOwnershipRepository()
+    val carController = CarController(costOfOwnershipRepository = costOfOwnershipRepository)
     val reviewController = ReviewController()
+    val costOfOwnershipController = CostOfOwnershipController(repository = costOfOwnershipRepository)
     val openApiSpec = loadOpenApiSpec()
 
     val app = Javalin.create { config ->
@@ -61,6 +67,7 @@ fun main() {
 
     app.get("/api/cars", carController::list)
     app.get("/api/cars/{id}", carController::get)
+    app.get("/api/cars/{id}/cost-of-ownership", costOfOwnershipController::get)
     app.get("/api/cars/{id}/reviews", reviewController::list)
     app.post("/api/cars/{id}/reviews", reviewController::upsert)
     app.get("/api/cars/{id}/reviews/me", reviewController::getMine)

@@ -43,9 +43,11 @@ class ReviewController(
         } catch (e: Exception) {
             throw BadRequestException("Invalid request body: ${e.message}")
         }
-        if (body.score < 1 || body.score > 100) {
-            throw BadRequestException("score must be between 1 and 100")
-        }
+        requireInRange("score", body.score)
+        body.interiorQualityScore?.let { requireInRange("interiorQualityScore", it) }
+        body.powertrainHarmonyScore?.let { requireInRange("powertrainHarmonyScore", it) }
+        body.nvhScore?.let { requireInRange("nvhScore", it) }
+        body.rideComfortScore?.let { requireInRange("rideComfortScore", it) }
 
         try {
             platformClient.tryConsumeUsage(ctx.authorizationHeaderOrThrow(), REVIEW_USAGE_METRIC)
@@ -60,6 +62,10 @@ class ReviewController(
             displayName = userContext.user.displayName,
             avatarUrl = userContext.user.avatarUrl,
             score = body.score,
+            interiorQualityScore = body.interiorQualityScore,
+            powertrainHarmonyScore = body.powertrainHarmonyScore,
+            nvhScore = body.nvhScore,
+            rideComfortScore = body.rideComfortScore,
             comment = body.comment?.trim()?.ifBlank { null },
         )
         ctx.json(review)
@@ -77,5 +83,9 @@ class ReviewController(
         val id = ctx.pathParam("id").toIntOrNull() ?: throw NotFoundException("Invalid car id")
         if (!carRepository.variantExists(id)) throw NotFoundException("Car $id not found")
         return id
+    }
+
+    private fun requireInRange(fieldName: String, value: Int) {
+        if (value < 1 || value > 100) throw BadRequestException("$fieldName must be between 1 and 100")
     }
 }

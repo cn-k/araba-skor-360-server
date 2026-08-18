@@ -2,7 +2,9 @@ package com.arabaskor360.cars
 
 import com.arabaskor360.db.tables.ModelVariantScoreTable
 import com.arabaskor360.db.tables.ModelVariantTable
+import com.arabaskor360.db.tables.NcapRatingTable
 import com.arabaskor360.db.tables.UserCarReviewTable
+import org.jetbrains.exposed.v1.core.Join
 import org.jetbrains.exposed.v1.core.ResultRow
 import org.jetbrains.exposed.v1.core.SortOrder
 import org.jetbrains.exposed.v1.core.avg
@@ -20,14 +22,12 @@ import java.math.BigDecimal
 
 class CarRepository {
 
-    fun listCars(query: String?, limit: Int, offset: Int): List<CarResponse> = transaction {
-        val join = ModelVariantTable.leftJoin(
-            ModelVariantScoreTable,
-            { ModelVariantTable.id },
-            { ModelVariantScoreTable.modelVariantId },
-        )
+    private fun baseJoin(): Join = ModelVariantTable
+        .leftJoin(ModelVariantScoreTable, { ModelVariantTable.id }, { ModelVariantScoreTable.modelVariantId })
+        .leftJoin(NcapRatingTable, { ModelVariantTable.id }, { NcapRatingTable.modelVariantId })
 
-        var stmt = join.selectAll()
+    fun listCars(query: String?, limit: Int, offset: Int): List<CarResponse> = transaction {
+        var stmt = baseJoin().selectAll()
         if (!query.isNullOrBlank()) {
             val pattern = "%${query.trim().lowercase()}%"
             stmt = stmt.where {
@@ -49,13 +49,7 @@ class CarRepository {
     }
 
     fun getCar(id: Int): CarResponse? = transaction {
-        val join = ModelVariantTable.leftJoin(
-            ModelVariantScoreTable,
-            { ModelVariantTable.id },
-            { ModelVariantScoreTable.modelVariantId },
-        )
-
-        val row = join.selectAll()
+        val row = baseJoin().selectAll()
             .where { ModelVariantTable.id eq id }
             .singleOrNull() ?: return@transaction null
 
@@ -67,24 +61,63 @@ class CarRepository {
         ModelVariantTable.selectAll().where { ModelVariantTable.id eq id }.limit(1).any()
     }
 
-    private fun communityStatsFor(variantIds: List<Int>): Map<Int, Pair<BigDecimal, Int>> {
+    private fun communityStatsFor(variantIds: List<Int>): Map<Int, CommunityStats> {
         if (variantIds.isEmpty()) return emptyMap()
-        val avgCol = UserCarReviewTable.score.avg(2)
-        val countCol = UserCarReviewTable.id.count()
+
+        val avgScore = UserCarReviewTable.score.avg(2)
+        val countScore = UserCarReviewTable.id.count()
+        val avgInterior = UserCarReviewTable.interiorQualityScore.avg(2)
+        val countInterior = UserCarReviewTable.interiorQualityScore.count()
+        val avgPowertrain = UserCarReviewTable.powertrainHarmonyScore.avg(2)
+        val countPowertrain = UserCarReviewTable.powertrainHarmonyScore.count()
+        val avgNvh = UserCarReviewTable.nvhScore.avg(2)
+        val countNvh = UserCarReviewTable.nvhScore.count()
+        val avgRideComfort = UserCarReviewTable.rideComfortScore.avg(2)
+        val countRideComfort = UserCarReviewTable.rideComfortScore.count()
+
         return UserCarReviewTable
-            .select(UserCarReviewTable.modelVariantId, avgCol, countCol)
+            .select(
+                UserCarReviewTable.modelVariantId, avgScore, countScore,
+                avgInterior, countInterior, avgPowertrain, countPowertrain,
+                avgNvh, countNvh, avgRideComfort, countRideComfort,
+            )
             .where { UserCarReviewTable.modelVariantId inList variantIds }
             .groupBy(UserCarReviewTable.modelVariantId)
             .associate { row ->
-                row[UserCarReviewTable.modelVariantId] to (row[avgCol]!! to row[countCol].toInt())
+                row[UserCarReviewTable.modelVariantId] to CommunityStats(
+                    score = row[avgScore]!!,
+                    reviewCount = row[countScore].toInt(),
+                    interiorQualityScore = row[avgInterior],
+                    interiorQualityCount = row[countInterior].toInt(),
+                    powertrainHarmonyScore = row[avgPowertrain],
+                    powertrainHarmonyCount = row[countPowertrain].toInt(),
+                    nvhScore = row[avgNvh],
+                    nvhCount = row[countNvh].toInt(),
+                    rideComfortScore = row[avgRideComfort],
+                    rideComfortCount = row[countRideComfort].toInt(),
+                )
             }
     }
 
+    private data class CommunityStats(
+        val score: BigDecimal,
+        val reviewCount: Int,
+        val interiorQualityScore: BigDecimal?,
+        val interiorQualityCount: Int,
+        val powertrainHarmonyScore: BigDecimal?,
+        val powertrainHarmonyCount: Int,
+        val nvhScore: BigDecimal?,
+        val nvhCount: Int,
+        val rideComfortScore: BigDecimal?,
+        val rideComfortCount: Int,
+    )
+
     private fun ResultRow.toCarResponse(
-        communityStats: Map<Int, Pair<BigDecimal, Int>>,
+        communityStats: Map<Int, CommunityStats>,
     ): CarResponse {
         val variantId = this[ModelVariantTable.id]
         val stats = communityStats[variantId]
+        val ncapStars = this.getOrNull(NcapRatingTable.stars)
         return CarResponse(
             id = variantId,
             make = this[ModelVariantTable.make],
@@ -98,8 +131,32 @@ class CarRepository {
             sampleSize = this.getOrNull(ModelVariantScoreTable.n),
             nhtsaCovered = this.getOrNull(ModelVariantScoreTable.nhtsaCovered),
             recallCount = this.getOrNull(ModelVariantScoreTable.recallCount),
-            communityScore = stats?.first,
-            communityReviewCount = stats?.second ?: 0,
+            communityScore = stats?.score,
+            communityReviewCount = stats?.reviewCount ?: 0,
+            communityCategoryScores = CommunityCategoryScores(
+                interiorQualityScore = stats?.interiorQualityScore,
+                interiorQualityCount = stats?.interiorQualityCount ?: 0,
+                powertrainHarmonyScore = stats?.powertrainHarmonyScore,
+                powertrainHarmonyCount = stats?.powertrainHarmonyCount ?: 0,
+                nvhScore = stats?.nvhScore,
+                nvhCount = stats?.nvhCount ?: 0,
+                rideComfortScore = stats?.rideComfortScore,
+                rideComfortCount = stats?.rideComfortCount ?: 0,
+            ),
+            ncapRating = if (ncapStars == null) {
+                null
+            } else {
+                NcapRating(
+                    stars = ncapStars,
+                    adultOccupantPct = this.getOrNull(NcapRatingTable.adultOccupantPct),
+                    childOccupantPct = this.getOrNull(NcapRatingTable.childOccupantPct),
+                    vruPct = this.getOrNull(NcapRatingTable.vruPct),
+                    safetyAssistPct = this.getOrNull(NcapRatingTable.safetyAssistPct),
+                    testYear = this.getOrNull(NcapRatingTable.testYear)!!,
+                    source = this.getOrNull(NcapRatingTable.sourceLabel)!!,
+                    notes = this.getOrNull(NcapRatingTable.notes),
+                )
+            },
         )
     }
 }

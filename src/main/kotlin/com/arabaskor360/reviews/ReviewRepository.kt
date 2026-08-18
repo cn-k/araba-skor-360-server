@@ -37,6 +37,10 @@ class ReviewRepository {
         displayName: String?,
         avatarUrl: String?,
         score: Int,
+        interiorQualityScore: Int?,
+        powertrainHarmonyScore: Int?,
+        nvhScore: Int?,
+        rideComfortScore: Int?,
         comment: String?,
     ): ReviewResponse = transaction {
         val now = OffsetDateTime.now()
@@ -44,6 +48,10 @@ class ReviewRepository {
 
         val updatedRows = UserCarReviewTable.update(where = { matcher() }) {
             it[UserCarReviewTable.score] = score
+            it[UserCarReviewTable.interiorQualityScore] = interiorQualityScore
+            it[UserCarReviewTable.powertrainHarmonyScore] = powertrainHarmonyScore
+            it[UserCarReviewTable.nvhScore] = nvhScore
+            it[UserCarReviewTable.rideComfortScore] = rideComfortScore
             it[UserCarReviewTable.comment] = comment
             it[UserCarReviewTable.displayName] = displayName
             it[UserCarReviewTable.avatarUrl] = avatarUrl
@@ -59,6 +67,10 @@ class ReviewRepository {
                 it[UserCarReviewTable.displayName] = displayName
                 it[UserCarReviewTable.avatarUrl] = avatarUrl
                 it[UserCarReviewTable.score] = score
+                it[UserCarReviewTable.interiorQualityScore] = interiorQualityScore
+                it[UserCarReviewTable.powertrainHarmonyScore] = powertrainHarmonyScore
+                it[UserCarReviewTable.nvhScore] = nvhScore
+                it[UserCarReviewTable.rideComfortScore] = rideComfortScore
                 it[UserCarReviewTable.comment] = comment
                 it[UserCarReviewTable.createdAt] = now
                 it[UserCarReviewTable.updatedAt] = now
@@ -85,6 +97,10 @@ class ReviewRepository {
         displayName = this[UserCarReviewTable.displayName],
         avatarUrl = this[UserCarReviewTable.avatarUrl],
         score = this[UserCarReviewTable.score],
+        interiorQualityScore = this[UserCarReviewTable.interiorQualityScore],
+        powertrainHarmonyScore = this[UserCarReviewTable.powertrainHarmonyScore],
+        nvhScore = this[UserCarReviewTable.nvhScore],
+        rideComfortScore = this[UserCarReviewTable.rideComfortScore],
         comment = this[UserCarReviewTable.comment],
         createdAt = this[UserCarReviewTable.createdAt],
         updatedAt = this[UserCarReviewTable.updatedAt],
