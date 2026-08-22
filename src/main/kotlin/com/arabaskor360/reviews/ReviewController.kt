@@ -3,7 +3,10 @@ package com.arabaskor360.reviews
 import com.arabaskor360.cars.CarRepository
 import com.arabaskor360.common.ApiException
 import com.arabaskor360.common.BadRequestException
+import com.arabaskor360.common.Lang
 import com.arabaskor360.common.NotFoundException
+import com.arabaskor360.common.resolveLang
+import com.arabaskor360.common.t
 import com.arabaskor360.platform.QuotaExceededException
 import com.arabaskor360.platform.UserPlatformClient
 import com.arabaskor360.platform.authorizationHeaderOrThrow
@@ -27,32 +30,36 @@ class ReviewController(
     }
 
     fun getMine(ctx: Context) {
+        val lang = ctx.resolveLang()
         val variantId = requireVariantId(ctx)
-        val userContext = ctx.requireUserContext(platformClient)
+        val userContext = ctx.requireUserContext(platformClient, lang)
         val review = repository.findForUser(variantId, userContext.user.id)
-            ?: throw NotFoundException("No review from this user for car $variantId")
+            ?: throw NotFoundException(
+                t(lang, "Bu kullanıcının $variantId için yorumu yok", "No review from this user for car $variantId"),
+            )
         ctx.json(review)
     }
 
     fun upsert(ctx: Context) {
+        val lang = ctx.resolveLang()
         val variantId = requireVariantId(ctx)
-        val userContext = ctx.requireUserContext(platformClient)
+        val userContext = ctx.requireUserContext(platformClient, lang)
 
         val body = try {
             ctx.bodyAsClass<ReviewRequest>()
         } catch (e: Exception) {
-            throw BadRequestException("Invalid request body: ${e.message}")
+            throw BadRequestException(t(lang, "Geçersiz istek gövdesi: ${e.message}", "Invalid request body: ${e.message}"))
         }
-        requireInRange("score", body.score)
-        body.interiorQualityScore?.let { requireInRange("interiorQualityScore", it) }
-        body.powertrainHarmonyScore?.let { requireInRange("powertrainHarmonyScore", it) }
-        body.nvhScore?.let { requireInRange("nvhScore", it) }
-        body.rideComfortScore?.let { requireInRange("rideComfortScore", it) }
+        requireInRange(lang, "score", body.score)
+        body.interiorQualityScore?.let { requireInRange(lang, "interiorQualityScore", it) }
+        body.powertrainHarmonyScore?.let { requireInRange(lang, "powertrainHarmonyScore", it) }
+        body.nvhScore?.let { requireInRange(lang, "nvhScore", it) }
+        body.rideComfortScore?.let { requireInRange(lang, "rideComfortScore", it) }
 
         try {
-            platformClient.tryConsumeUsage(ctx.authorizationHeaderOrThrow(), REVIEW_USAGE_METRIC)
+            platformClient.tryConsumeUsage(ctx.authorizationHeaderOrThrow(lang), REVIEW_USAGE_METRIC)
         } catch (e: QuotaExceededException) {
-            throw ApiException(429, e.message ?: "Usage quota exceeded")
+            throw ApiException(429, t(lang, "Kullanım kotası aşıldı", "Usage quota exceeded"))
         }
 
         val review = repository.upsert(
@@ -72,20 +79,33 @@ class ReviewController(
     }
 
     fun deleteMine(ctx: Context) {
+        val lang = ctx.resolveLang()
         val variantId = requireVariantId(ctx)
-        val userContext = ctx.requireUserContext(platformClient)
+        val userContext = ctx.requireUserContext(platformClient, lang)
         val deleted = repository.delete(variantId, userContext.user.id)
-        if (!deleted) throw NotFoundException("No review from this user for car $variantId")
+        if (!deleted) {
+            throw NotFoundException(
+                t(lang, "Bu kullanıcının $variantId için yorumu yok", "No review from this user for car $variantId"),
+            )
+        }
         ctx.status(204)
     }
 
     private fun requireVariantId(ctx: Context): Int {
-        val id = ctx.pathParam("id").toIntOrNull() ?: throw NotFoundException("Invalid car id")
-        if (!carRepository.variantExists(id)) throw NotFoundException("Car $id not found")
+        val lang = ctx.resolveLang()
+        val id = ctx.pathParam("id").toIntOrNull()
+            ?: throw NotFoundException(t(lang, "Geçersiz araç id'si", "Invalid car id"))
+        if (!carRepository.variantExists(id)) {
+            throw NotFoundException(t(lang, "Araç bulunamadı: $id", "Car $id not found"))
+        }
         return id
     }
 
-    private fun requireInRange(fieldName: String, value: Int) {
-        if (value < 1 || value > 100) throw BadRequestException("$fieldName must be between 1 and 100")
+    private fun requireInRange(lang: Lang, fieldName: String, value: Int) {
+        if (value < 1 || value > 100) {
+            throw BadRequestException(
+                t(lang, "$fieldName 1 ile 100 arasında olmalı", "$fieldName must be between 1 and 100"),
+            )
+        }
     }
 }

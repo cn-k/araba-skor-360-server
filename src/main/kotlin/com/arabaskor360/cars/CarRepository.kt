@@ -1,5 +1,7 @@
 package com.arabaskor360.cars
 
+import com.arabaskor360.common.Lang
+import com.arabaskor360.common.t
 import com.arabaskor360.db.tables.ModelVariantScoreTable
 import com.arabaskor360.db.tables.ModelVariantTable
 import com.arabaskor360.db.tables.NcapRatingTable
@@ -26,7 +28,7 @@ class CarRepository {
         .leftJoin(ModelVariantScoreTable, { ModelVariantTable.id }, { ModelVariantScoreTable.modelVariantId })
         .leftJoin(NcapRatingTable, { ModelVariantTable.id }, { NcapRatingTable.modelVariantId })
 
-    fun listCars(query: String?, limit: Int, offset: Int): List<CarResponse> = transaction {
+    fun listCars(query: String?, limit: Int, offset: Int, lang: Lang = Lang.TR): List<CarResponse> = transaction {
         var stmt = baseJoin().selectAll()
         if (!query.isNullOrBlank()) {
             val pattern = "%${query.trim().lowercase()}%"
@@ -45,16 +47,16 @@ class CarRepository {
         val variantIds = variantRows.map { it[ModelVariantTable.id] }
         val communityStats = communityStatsFor(variantIds)
 
-        variantRows.map { row -> row.toCarResponse(communityStats) }
+        variantRows.map { row -> row.toCarResponse(communityStats, lang) }
     }
 
-    fun getCar(id: Int): CarResponse? = transaction {
+    fun getCar(id: Int, lang: Lang = Lang.TR): CarResponse? = transaction {
         val row = baseJoin().selectAll()
             .where { ModelVariantTable.id eq id }
             .singleOrNull() ?: return@transaction null
 
         val communityStats = communityStatsFor(listOf(id))
-        row.toCarResponse(communityStats)
+        row.toCarResponse(communityStats, lang)
     }
 
     fun variantExists(id: Int): Boolean = transaction {
@@ -112,8 +114,20 @@ class CarRepository {
         val rideComfortCount: Int,
     )
 
+    /** `model_variant_score.confidence` is a small, closed enum owned by the external scoring
+     *  pipeline (High/Medium/Low) — safe to translate with a fixed lookup, unlike free-text
+     *  fields (e.g. ncapRating.notes) that the pipeline could change without notice. Falls back
+     *  to the raw value for anything unrecognized rather than dropping it. */
+    private fun localizeConfidence(confidence: String?, lang: Lang): String? = when (confidence) {
+        "High" -> t(lang, "Yüksek", "High")
+        "Medium" -> t(lang, "Orta", "Medium")
+        "Low" -> t(lang, "Düşük", "Low")
+        else -> confidence
+    }
+
     private fun ResultRow.toCarResponse(
         communityStats: Map<Int, CommunityStats>,
+        lang: Lang,
     ): CarResponse {
         val variantId = this[ModelVariantTable.id]
         val stats = communityStats[variantId]
@@ -127,7 +141,7 @@ class CarRepository {
             yearEnd = this[ModelVariantTable.yearEnd],
             trName = this[ModelVariantTable.trName],
             score = this[ModelVariantScoreTable.score],
-            confidence = this.getOrNull(ModelVariantScoreTable.confidence),
+            confidence = localizeConfidence(this.getOrNull(ModelVariantScoreTable.confidence), lang),
             sampleSize = this.getOrNull(ModelVariantScoreTable.n),
             nhtsaCovered = this.getOrNull(ModelVariantScoreTable.nhtsaCovered),
             recallCount = this.getOrNull(ModelVariantScoreTable.recallCount),

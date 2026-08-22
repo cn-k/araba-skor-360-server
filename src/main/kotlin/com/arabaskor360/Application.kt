@@ -4,7 +4,9 @@ import com.arabaskor360.cars.CarController
 import com.arabaskor360.common.ApiException
 import com.arabaskor360.common.BadRequestException
 import com.arabaskor360.common.NotFoundException
+import com.arabaskor360.common.resolveLang
 import com.arabaskor360.common.sharedObjectMapper
+import com.arabaskor360.common.t
 import com.arabaskor360.config.AppConfig
 import com.arabaskor360.cost.CostOfOwnershipController
 import com.arabaskor360.cost.CostOfOwnershipRepository
@@ -84,7 +86,7 @@ fun main() {
     }
     app.exception(Exception::class.java) { e, ctx ->
         log.error("Unhandled exception on ${ctx.method()} ${ctx.path()}", e)
-        ctx.status(500).json(mapOf("error" to "Internal server error"))
+        ctx.status(500).json(mapOf("error" to t(ctx.resolveLang(), "Sunucu hatası", "Internal server error")))
     }
 
     app.start(AppConfig.port)

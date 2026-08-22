@@ -36,6 +36,7 @@ paths:
       summary: Araçları listele
       operationId: listCars
       parameters:
+        - $ref: "#/components/parameters/Lang"
         - name: q
           in: query
           description: Marka/model üzerinde serbest metin arama
@@ -71,6 +72,7 @@ paths:
       operationId: getCar
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
       responses:
         "200":
           description: Araç
@@ -89,14 +91,20 @@ paths:
         `score`'un aksine önceden hesaplanmış tek bir sayı değil: MTV ve yakıt maliyeti
         aracın gerçek tescil yılına ve yıllık km'sine bağlı olarak canlı hesaplanır. Bir
         model_variant genelde birden çok motor/yakıt seçeneği (VCA trim'i) içerdiğinden
-        `options` bir liste döner; NEDC ve WLTP test metodolojisine ait satırlar asla
-        birbirine karıştırılmaz, her option kendi `testingScheme`'ini taşır. `mtv`/`fuel`
-        alanları veri eşleşmezse (örn. elektrikli araçlar, henüz kW bazlı MTV tarifesi
-        transcribe edilmedi) `null` döner — sessizce yanlış bir sayı üretmek yerine
+        `options` bir liste döner — gruplama `(fuelType, testingScheme, engineCc)` üçlüsüne
+        göre yapılır, yani her GERÇEK motor kendi satırında görünür (aynı yakıt tipinde
+        farklı hacimli iki motoru — ör. 1197cc ve 1618cc — tek bir fiktif "ortalama motor"a
+        indirgemez; bu, MTV'yi yanlış vergi dilimine düşürüp gerçek olmayan bir tutar
+        gösterebiliyordu, canlı DB'de doğrulanıp düzeltildi). NEDC ve WLTP test
+        metodolojisine ait satırlar asla birbirine karıştırılmaz, her option kendi
+        `testingScheme`'ini taşır. `mtv`/`fuel` alanları veri eşleşmezse (örn. elektrikli
+        araçlar, henüz kW bazlı MTV tarifesi transcribe edilmedi) `null` döner — sessizce
+        yanlış bir sayı üretmek yerine
         `notes` içinde açıklanır.
       operationId: getCostOfOwnership
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
         - name: registrationYear
           in: query
           description: Aracın gerçek tescil yılı. Verilmezse model_variant.yearStart kullanılır (yaklaşık değer).
@@ -134,6 +142,7 @@ paths:
       operationId: listReviews
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
         - name: limit
           in: query
           schema:
@@ -173,6 +182,7 @@ paths:
         - firebaseAuth: []
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
       requestBody:
         required: true
         content:
@@ -208,6 +218,7 @@ paths:
         - firebaseAuth: []
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
       responses:
         "200":
           description: Review
@@ -227,6 +238,7 @@ paths:
         - firebaseAuth: []
       parameters:
         - $ref: "#/components/parameters/CarId"
+        - $ref: "#/components/parameters/Lang"
       responses:
         "204":
           description: Silindi
@@ -251,6 +263,18 @@ components:
       description: model_variant.id
       schema:
         type: integer
+    Lang:
+      name: lang
+      in: query
+      description: >
+        Yanıttaki kullanıcıya açık metinlerin (notes, hata mesajları) dili. "en" dışında
+        her şey (boş dahil) Türkçe döner — varsayılan bu uygulamanın ana pazarı olduğu
+        için Türkçe'dir. Sayısal/tarih alanlarını, ya da TSB gibi dış kaynakların kendi
+        (her zaman Türkçe) metinlerini etkilemez.
+      schema:
+        type: string
+        enum: [tr, en]
+        default: tr
 
   responses:
     NotFound:
@@ -306,7 +330,9 @@ components:
         confidence:
           type: string
           nullable: true
-          enum: [Low, Medium, High]
+          description: >
+            `?lang`'a göre çevrilir (ör. `lang=tr` için "Yüksek"/"Orta"/"Düşük", `lang=en`
+            için "High"/"Medium"/"Low") — sabit bir enum değeri olarak parse etmeyin.
         sampleSize:
           type: integer
           nullable: true
@@ -421,14 +447,30 @@ components:
             TSB'nin (Türkiye Sigorta Birliği) resmi aylık kasko değer listesinden, bu araç +
             tescil yılına uyan trim'lerin GERÇEK değerleri (tahmin değil). Boş, tek, ya da
             birden çok satır dönebilir — bir nesil birden fazla trim içerir, bu yüzden
-            tekil bir sayıya indirgenmez. Şu an sadece bilgi amaçlı: estimatedKaskoAnnualTl
-            ya da MTV değer bandı hesabına otomatik bağlanmıyor.
+            tekil bir sayıya indirgenmez. trValueTl verilmezse estimatedKaskoAnnualTl bu
+            listenin ortalamasını kullanır (MTV değer bandı hesabına hâlâ bağlı değil).
+        valueHistory:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValueHistoryTrend"
+          description: >
+            kaskoDegerOptions'daki her bir trim için, o SABİT model yılının TSB değerinin
+            takvim zamanı içinde (her ingest edilmiş snapshot_month'ta) nasıl değiştiğini
+            gösteren longitudinal seri — marka, trim VE model yılı sabit tutulup sadece
+            snapshot_month değişir, ek veri kaynağı gerektirmez. Eşleşen trim için TSB'de tek
+            snapshot varsa hiç dönmez. Nominal TL değerler enflasyondan arındırılmamıştır — TL
+            devalüasyonu genelde aracın gerçek yaşlanma kaybından daha büyük olduğu için
+            valueTl serisi sıklıkla ARTAN değerler gösterir, bu gerçek (reel) değer kazancı
+            anlamına gelmez. Bunun için her noktada ayrıca TCMB USD kuruyla hesaplanmış
+            valueUsd de var — asıl "gerçekten değer kazandı mı kaybetti mi" sorusuna cevap
+            veren `usdChangePct`/`usdChangePerYearPct` bu değerlere dayanır.
         estimatedKaskoAnnualTl:
           $ref: "#/components/schemas/EstimateRange"
           nullable: true
           description: >
-            Gerçek bir teklif DEĞİL — kaba bir aralık (araç değerinin %2-5'i). Sadece
-            trValueTl query param'ı verilmişse dolu; aracın değeri bilinmeden hesaplanamaz.
+            Gerçek bir teklif DEĞİL — araç değerinin %2-5'i arası kaba bir aralık. Araç değeri
+            önce trValueTl query param'ından, o verilmezse kaskoDegerOptions'ın ortalamasından
+            alınır; ikisi de yoksa (ne trValueTl ne TSB eşleşmesi) null döner.
         estimatedTrafficInsuranceAnnualTl:
           $ref: "#/components/schemas/EstimateRange"
           description: >
@@ -451,6 +493,12 @@ components:
     KaskoDegerOption:
       type: object
       properties:
+        tipKodu:
+          type: integer
+          description: >
+            TSB'nin bu trim'e verdiği dahili tip kodu — sadece bilgi amaçlı gösterilir, eşleştirme
+            için KULLANILMAZ (bu kod TSB tarafından her model_year listesinde bağımsızca yeniden
+            kullanılıyor, aynı trim'i yıllar arasında takip etmek için güvenilir değil)
         make:
           type: string
           description: "TSB'nin kendi marka string'i (ör. \"TOFAS-FIAT\"), bizim `make` alanımızla birebir aynı olmayabilir"
@@ -467,6 +515,60 @@ components:
           description: Bu değerin ait olduğu TSB anlık görüntüsünün ayı (o ayın ilk günü)
         source:
           type: string
+
+    ValueHistoryPoint:
+      type: object
+      properties:
+        year:
+          type: integer
+          description: TSB anlık görüntüsünün takvim yılı (araç modelYear'ı değil)
+        valueTl:
+          type: number
+          description: O yılki anlık görüntüde bu SABİT model yılının nominal TL değeri
+        valueUsd:
+          type: number
+          nullable: true
+          description: >
+            valueTl / o günün TCMB USD döviz alış kuru (exchange_rate tablosu). TRY'nin kendi
+            devalüasyonundan arındırılmış, daha gerçekçi değer sinyali. O tarih için kur verisi
+            yoksa null.
+
+    ValueHistoryTrend:
+      type: object
+      properties:
+        make:
+          type: string
+        trim:
+          type: string
+        modelYear:
+          type: integer
+          description: Sabit tutulan araç model yılı — points dizisindeki her nokta bu aynı model yılının farklı yıllardaki değeridir
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/ValueHistoryPoint"
+          description: year'a göre artan sırada, TSB'nin bu trim + model yılı için ingest edilmiş her anlık görüntüsü
+        nominalChangePct:
+          type: number
+          nullable: true
+          description: >
+            En eski ile en yeni snapshot arasındaki nominal TL değişim yüzdesi (pozitif = nominal
+            artış — bkz. valueHistory alan açıklamasındaki enflasyon notu). Tek snapshot varsa null.
+        nominalChangePerYearPct:
+          type: number
+          nullable: true
+          description: nominalChangePct'nin yıl başına ortalaması
+        usdChangePct:
+          type: number
+          nullable: true
+          description: >
+            En eski ile en yeni snapshot arasındaki USD-bazlı değişim yüzdesi — asıl "gerçekten
+            değer kazandı mı kaybetti mi" sorusunun cevabı (negatif = gerçek değer kaybı). Seri
+            içindeki herhangi bir noktada valueUsd yoksa (kur verisi eksikse) null.
+        usdChangePerYearPct:
+          type: number
+          nullable: true
+          description: usdChangePct'nin yıl başına ortalaması
 
     CostOption:
       type: object

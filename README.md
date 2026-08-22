@@ -51,6 +51,27 @@ metriğini tüketir (`/usage/daily_reviews/consume`). Kota aşılırsa 429 döne
 servisi kota kontrolü sırasında erişilemezse istek yine de kabul edilir (fail-open),
 ama kimlik doğrulamanın kendisi başarısız olursa istek reddedilir (fail-closed).
 
+### Dil desteği — `?lang=tr|en`
+
+Her uç, `?lang=en` query param'ı ile kullanıcıya açık metinleri (cost-of-ownership
+`notes` dizisi, hata mesajları — `error` alanı, `confidence`) İngilizce döndürür.
+`?lang` verilmezse ya da `tr`/tanınmayan bir değer verilirse Türkçe döner (varsayılan).
+JSON **alan adları** (`id`, `make`, `confidence`, ...) her zaman İngilizce kalır — bu
+API kontratının parçası, çevrilen kısım sadece metin *değerleri*
+([Lang.kt](src/main/kotlin/com/arabaskor360/common/Lang.kt), basit `t(lang, tr, en)`
+fonksiyonu; ayrı bir i18n/resource-bundle kütüphanesi yok çünkü çevrilen tüm metinler
+statik ya da birkaç değişken içeren tek satırlık cümleler, veya `confidence` gibi
+küçük/sabit bir enum).
+
+**Çevrilmeyenler (bilinçli):** TSB gibi dış kaynakların kendi metinleri
+(`kaskoDegerOptions[].trim`, `.make`), kullanıcıların kendi yorum metinleri, ve
+`ncapRating.notes`/`ncapRating.source` — bunlar bu uygulamanın request anında ürettiği
+metin değil, veri pipeline'ı tarafından bir kere yazılıp `ncap_rating` tablosunda
+saklanan serbest metin (zaten İngilizce kaynaklara atıf yapıyor, ör. "euroncap.com
+press release"). Güvenilir bir çevirisi için o tablonun kendisinin iki dilli
+tutulması gerekir — bu depo tek başına çözemez, `araba-skor-360-loader` tarafında
+ele alınmalı.
+
 ### Review kategorileri
 
 Tek bir toplam skor yerine, `score` (genel memnuniyet) tek zorunlu alan; ayrıca dört
@@ -143,6 +164,17 @@ olarak NEDC'den ~%10-20 daha yüksek tüketim raporlar. Elektrikli araçlar içi
 `null` döner (ayrı kW bazlı MTV tarifesi henüz transcribe edilmedi) — sessizce yanlış bir sayı
 üretmek yerine `notes` alanında açıklanır.
 
+**Gruplama anahtarı `(fuelType, testingScheme, engineCapacityCc)` — motor hacmi dahil:**
+Başlangıçta sadece `(fuelType, testingScheme)`'e göre gruplanıyordu; bu, aynı yakıt tipinde
+birden fazla gerçek motoru (ör. Renault Kadjar'ın "Petrol" seçeneği altında hem 1197cc hem
+1618cc TCe motoru var) tek bir fiktif "ortalama motor"a indirgiyordu. Sorun canlı DB'de
+somut olarak yakalandı: ortalama ~1337cc, gerçekte var olmayan bir motor büyüklüğü, MTV'yi
+yanlış vergi dilimine düşürüyordu — gerçek motorlar 2.238₺ (1197cc, 0-1300cc dilimi) ve
+8.145₺ (1618cc, 1601-1800cc dilimi) öderken, fiktif ortalama 4.354₺ (1301-1600cc dilimi)
+gösteriyordu, neredeyse 2 kat sapma. Düzeltme sonrası her gerçek motor kendi `CostOption`
+satırında ayrı görünüyor; aynı motorun farklı jant/donanım varyantları (ör. 16/17" vs 19")
+hâlâ birbiriyle ortalanıyor — bu meşru, çünkü fiziksel olarak aynı motor.
+
 **Yakıt fiyatı — günlük bellek cache** ([FuelPriceCache.kt](src/main/kotlin/com/arabaskor360/cost/FuelPriceCache.kt)):
 `fuel_price` artık `araba-skor-360-loader`'ın elle çalıştırdığı bir script tarafından değil, bu
 servis tarafından günde bir kere (TR takvim gününe göre — `Europe/Istanbul`) otomatik
@@ -157,9 +189,10 @@ değil.
 **Kasko + trafik sigortası — kaba tahmin, gerçek teklif değil:** İkisi için de ücretsiz/herkese
 açık bir fiyat API'si yok (araştırıldı — sadece web tabanlı teklif karşılaştırma siteleri var,
 hepsi sürücü bazlı kişiselleştirilmiş fiyat veriyor). Bu yüzden:
-- **`estimatedKaskoAnnualTl`** — aracın değerinin (`trValueTl` query param'ı, zaten MTV değer
-  bandı için var olan parametre) %2-5'i arası kaba bir aralık. `trValueTl` verilmezse `null`
-  döner — araç değeri bilinmeden bir tahmin uydurmuyoruz.
+- **`estimatedKaskoAnnualTl`** — araç değerinin %2-5'i arası kaba bir aralık. Araç değeri önce
+  `trValueTl` query param'ından (verilmişse), yoksa aşağıdaki `kaskoDegerOptions`'ın (TSB'den
+  gelen gerçek değerler) ortalamasından alınır. İkisi de yoksa `null` döner — araç değeri hiç
+  bilinmeden bir tahmin uydurmuyoruz.
 - **`estimatedTrafficInsuranceAnnualTl`** — SEDDK'nin düzenlediği tavan fiyat sistemine dayalı,
   ama araç sınıfı/il/hasar basamağı bu uygulamada takip edilmediği için **tüm binek araçlar için
   aynı jenerik aralık** (2026 için ~8.500-16.000₺), model_variant'a özel değil.
@@ -177,10 +210,67 @@ olduğu için TSB'nin takip ettiği her marka olduğu gibi saklanıyor, eşleşt
 Bu araç modelinin `make`/`trName` alanları arama terimi olarak kullanılıyor; bir nesil birden çok
 trim içerdiğinden `kaskoDegerOptions` boş, tek, ya da birden çok satır dönebilir.
 
-Şu an bilerek **sadece bilgi amaçlı** — `estimatedKaskoAnnualTl`'e ya da MTV'nin değer bandı
-hesabına (`trValueTl`) otomatik bağlanmıyor; bu, davranış değiştiren ayrı bir karar, ileride
-konuşulabilir. TSB dosyası aylık güncellendiği için `araba-skor-360-loader`'da
-`python -m carscore_ingest.kasko_deger_ingest` de aylık tekrar çalıştırılmalı.
+`trValueTl` verilmediğinde `estimatedKaskoAnnualTl`'in araç değeri girdisi olarak
+**otomatik** kullanılıyor (eşleşen trim'lerin ortalaması — birden fazla trim eşleştiyse tek bir
+trim seçmek yerine ortalama alınıyor, VCA yakıt/motor hacmi ortalamasıyla aynı mantık). MTV'nin
+kendi değer bandı hesabına (`trValueTl` parametresi) hâlâ bağlı **değil** — bu ayrı, davranış
+değiştiren bir karar, ileride konuşulabilir. TSB dosyası aylık güncellendiği için
+`araba-skor-360-loader`'da `python -m carscore_ingest.kasko_deger_ingest` de aylık tekrar
+çalıştırılmalı.
+
+**Değer geçmişi — `valueHistory` (longitudinal, gerçek zaman serisi):** `araba-skor-360-loader`
+artık `kasko_deger`'i tek aylık anlık görüntü değil, **her yıl Ağustos ayı için geriye dönük**
+(2020-08-01'den 2026-08-01'e, 7 snapshot) ingest ediyor. `computeValueHistory`
+([CostOfOwnershipRepository.kt](src/main/kotlin/com/arabaskor360/cost/CostOfOwnershipRepository.kt))
+`kaskoDegerOptions`'da eşleşen her trim için `(marka_adi, tip_adi, model_year)` **üçü de sabit**
+tutularak, sadece `snapshot_month` değişecek şekilde sorgu atıyor — yani "bu SABİT model
+yılındaki araç, farklı takvim yıllarında TSB'ye göre ne kadar değerliydi" sorusuna cevap veriyor.
+Bu, tek bir fiziksel aracın zaman içindeki gerçek değer serisi (longitudinal) — farklı model
+yıllarını birbiriyle kıyaslayan kesitsel bir yaklaşım değil.
+
+**Neden model yılını sabit tutuyoruz, kesitsel karşılaştırma yapmıyoruz:** İlk versiyonda aynı
+anlık görüntü içinde farklı `model_year` satırları kıyaslanıyordu (`tip_kodu` üzerinden
+eşleştirilerek). Bu yaklaşım iki nedenle terk edildi: (1) canlı DB'ye karşı doğrulanırken
+`tip_kodu`'nun TSB'nin her `model_year` listesinde bağımsızca yeniden kullanılan bir sıra
+numarası olduğu ortaya çıktı (ör. `tip_kodu=1087`, 2012'de bir Megane, 2016'da bir traktör,
+2018'de bir Duster'a denk geliyor — aynı trim değil, tesadüfi çakışma); (2) `(marka_adi,
+tip_adi)` metniyle düzeltilse bile, farklı model yıllarını aynı anda kıyaslamak gerçek yaşlanma
+etkisini nesil/facelift farklarıyla karıştırıyordu ("elma armut" kıyası) — artık gerçek çok-yıllı
+veri elimizde olduğuna göre buna gerek kalmadı.
+
+**Nominal TL vs. USD — asıl gerçek değer kaybı/kazancı USD'de:** `nominalChangePct`/
+`nominalChangePerYearPct` ham TL değişimi. Türkiye'de TL devalüasyonu genelde aracın fiziksel
+yaşlanmadan kaynaklanan gerçek değer kaybından çok daha büyük olduğu için, bu sayılar sıklıkla
+**artış** gösterir (ör. 2018 model bir Duster trim'i 2020→2026 arası nominal TL bazında ~%470
+"değer kazanmış" görünüyor — bu ekonomik olarak bir kazanç değil, TL'nin kendi değer kaybı).
+
+Bunu düzeltmek için `araba-skor-360-loader` artık aynı 7 anchor tarihi (2020-08-01..2026-08-01)
+için `exchange_rate` tablosuna TCMB'nin (Türkiye Cumhuriyet Merkez Bankası) resmi günlük
+USD/TRY döviz alış kurunu da çekiyor
+([ExchangeRateTable.kt](src/main/kotlin/com/arabaskor360/db/tables/ExchangeRateTable.kt)).
+`computeValueHistory` her `ValueHistoryPoint`'e `valueUsd = valueTl / o günün TCMB döviz alış
+kuru` alanını ekliyor, ve trend seviyesinde `usdChangePct`/`usdChangePerYearPct` bunun üzerinden
+hesaplanıyor — TRY'nin kendi devalüasyonundan arındırılmış, gerçeğe çok daha yakın bir sinyal.
+Canlı örnek: aynı Duster trim'i USD bazında 2020→2026 arası **%16.5 değer KAYBETMİŞ**
+(`usdChangePerYearPct: -2.76`) — nominal TL'nin gösterdiği "%470 artış" ile taban tabana zıt,
+ama ekonomik olarak doğru olan bu. Seri içindeki herhangi bir nokta için o tarihte
+`exchange_rate` satırı yoksa `valueUsd` (ve dolayısıyla `usdChangePct`) `null` döner — tam bir
+enflasyon deflatörü değil (USD'nin kendi enflasyonu var), ama TRY'ninkinden kıyaslanamayacak
+kadar küçük ve öngörülebilir.
+
+Eşleşen trim'in TSB'de sadece tek snapshot'ı varsa (`points.size < 2`) o trim `valueHistory`'de
+hiç görünmez; `notes`'a bu durum düşülür.
+
+**Sabit ay çapası — karışık ingest cadence'ine dayanıklı:** Geçmiş backfill yıllık, sadece Ağustos
+(2020-08-01 .. 2026-08-01). "Güncel kasko bedeli" tazeliği (`kaskoDegerOptions`/
+`estimatedKaskoAnnualTl`, en yeni `snapshot_month`'u okur) için ileride daha sık ingest
+edilmesi bekleniyor — ama `computeValueHistory` bu ek ingest'leri görmezden gelir: sadece
+`VALUE_HISTORY_ANCHOR_MONTH` (Ağustos) ayına denk gelen satırları kullanır. Böylece Eylül gibi
+ara aylarda tazelik amaçlı yeni bir snapshot ingest edilse bile `valueHistory` serisi hep tam
+12 ay aralıklı, tutarlı kalır — o yılın "en güncel" değerini trend'e karıştırmaz. Trade-off:
+yeni bir yılın verisi ancak bir sonraki Ağustos backfill'i yapılınca `valueHistory`'ye eklenir
+(yıl içinde erken bir "bu yıla dair henüz" noktası vermez — bilinçli bir basitlik tercihi,
+gerekirse ayrı bir "kısmi yıl" alanı olarak ileride eklenebilir).
 
 ## API Dokümantasyonu (Swagger)
 

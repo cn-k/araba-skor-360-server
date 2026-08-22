@@ -1,6 +1,8 @@
 package com.arabaskor360.cars
 
 import com.arabaskor360.common.NotFoundException
+import com.arabaskor360.common.resolveLang
+import com.arabaskor360.common.t
 import com.arabaskor360.cost.CostOfOwnershipRepository
 import com.arabaskor360.cost.DEFAULT_ANNUAL_KM
 import io.javalin.http.Context
@@ -11,15 +13,19 @@ class CarController(
 ) {
 
     fun list(ctx: Context) {
+        val lang = ctx.resolveLang()
         val query = ctx.queryParam("q")
         val limit = (ctx.queryParam("limit")?.toIntOrNull() ?: 50).coerceIn(1, 200)
         val offset = (ctx.queryParam("offset")?.toIntOrNull() ?: 0).coerceAtLeast(0)
-        ctx.json(repository.listCars(query, limit, offset))
+        ctx.json(repository.listCars(query, limit, offset, lang))
     }
 
     fun get(ctx: Context) {
-        val id = ctx.pathParam("id").toIntOrNull() ?: throw NotFoundException("Invalid car id")
-        val car = repository.getCar(id) ?: throw NotFoundException("Car $id not found")
+        val lang = ctx.resolveLang()
+        val id = ctx.pathParam("id").toIntOrNull()
+            ?: throw NotFoundException(t(lang, "Geçersiz araç id'si", "Invalid car id"))
+        val car = repository.getCar(id, lang)
+            ?: throw NotFoundException(t(lang, "Araç bulunamadı: $id", "Car $id not found"))
 
         // Cost of ownership needs a real car's registration year/mileage, which we don't have —
         // use sensible defaults (generation start year, 15,000 km/year) so the detail page gets
@@ -32,6 +38,7 @@ class CarController(
             registrationYear = car.yearStart,
             annualKm = DEFAULT_ANNUAL_KM,
             trValueTl = null,
+            lang = lang,
         )
 
         ctx.json(car.copy(costOfOwnership = costOfOwnership))
