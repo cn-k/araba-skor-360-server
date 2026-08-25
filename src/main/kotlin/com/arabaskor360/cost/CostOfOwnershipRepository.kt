@@ -172,13 +172,34 @@ class CostOfOwnershipRepository(
             maxTl = TRAFFIC_INSURANCE_MAX_TL,
         )
 
+        // Combined "gerçekten bu motoru bir yıl sahiplenmenin toplam maliyeti" range per option —
+        // real MTV+fuel plus the two insurance estimates. Only filled in when totalAnnualTl AND
+        // estimatedKasko both exist; a missing kasko vehicle value means we can't responsibly
+        // claim a "total" that's silently short a real cost component.
+        val optionsWithTotals = if (estimatedKasko == null) {
+            options
+        } else {
+            options.map { option ->
+                if (option.totalAnnualTl == null) {
+                    option
+                } else {
+                    option.copy(
+                        totalWithInsuranceAnnualTl = EstimateRange(
+                            minTl = option.totalAnnualTl + estimatedKasko.minTl + estimatedTrafficInsurance.minTl,
+                            maxTl = option.totalAnnualTl + estimatedKasko.maxTl + estimatedTrafficInsurance.maxTl,
+                        ),
+                    )
+                }
+            }
+        }
+
         CostOfOwnershipResponse(
             modelVariantId = modelVariantId,
             registrationYear = registrationYear,
             ageYears = ageYears,
             asOfYear = asOfYear,
             annualKm = annualKm,
-            options = options,
+            options = optionsWithTotals,
             kaskoDegerOptions = kaskoDegerOptions,
             valueHistory = valueHistory,
             estimatedKaskoAnnualTl = estimatedKasko,
@@ -279,6 +300,9 @@ class CostOfOwnershipRepository(
             fuel = fuel,
             mtv = mtv,
             totalAnnualTl = total,
+            // Filled in later, once estimatedKaskoAnnualTl/estimatedTrafficInsuranceAnnualTl are
+            // known (they're computed after options, and don't vary per engine option).
+            totalWithInsuranceAnnualTl = null,
             note = null,
         )
     }

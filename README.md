@@ -35,7 +35,7 @@ Sunucu `PORT` (varsayılan 7070) üzerinde ayağa kalkar.
 
 | Method | Path | Auth | Açıklama |
 |---|---|---|---|
-| GET | `/api/cars?q=&limit=&offset=` | - | Araç listesi (skor + topluluk skoru ile) |
+| GET | `/api/cars?q=&make=&minYear=&maxYear=&limit=&offset=&sortBy=&order=` | - | Araç listesi (skor + topluluk skoru ile) |
 | GET | `/api/cars/{id}` | - | Araç detayı |
 | GET | `/api/cars/{id}/cost-of-ownership?registrationYear=&annualKm=&trValueTl=` | - | Yıllık yürütme maliyeti (MTV + yakıt), 0-100 skordan ayrı |
 | GET | `/api/cars/{id}/reviews` | - | Araca ait kullanıcı skor/yorumları |
@@ -50,6 +50,57 @@ user-platform-service'in `/v1/users/me/context/araba-skor` uç noktasına iletil
 metriğini tüketir (`/usage/daily_reviews/consume`). Kota aşılırsa 429 döner; auth
 servisi kota kontrolü sırasında erişilemezse istek yine de kabul edilir (fail-open),
 ama kimlik doğrulamanın kendisi başarısız olursa istek reddedilir (fail-closed).
+
+### Filtre — `GET /api/cars?make=`
+
+`q` (marka/model üzerinde substring arama) ile karışmasın diye ayrı bir parametre:
+`make` **tam eşleşme** (case-insensitive) yapıyor — `q` gibi "içeren" değil, seçilen
+markanın tamamını istiyor. Virgülle birden fazla marka verilebilir (`make=Renault,BMW`)
+— içeride `IN` sorgusuna dönüşüyor. `q` ile birlikte kullanılabilir, ikisi `AND`'lenir
+(`make=Renault&q=clio` → sadece Renault Clio'lar, başka markadaki "clio" benzeri bir
+şey varsa bile hariç). Eşleşme yoksa hata değil, boş dizi döner.
+
+**`minYear`/`maxYear`** — jenerasyonun kendi `[yearStart, yearEnd]` aralığı verilen
+aralıkla **kesişiyorsa** eşleşir (`yearEnd >= minYear` ve/veya `yearStart <= maxYear`),
+sadece o yılda başlayanlar değil — ör. `minYear=2015` verirsen 2012-2018 arası üretilmiş
+bir jenerasyon da eşleşir, çünkü 2015'te hâlâ satılıyordu. İkisi de opsiyonel (açık uçlu
+aralık için tek biri verilebilir), `minYear > maxYear` ise 400 döner. `make`/`q` ile
+serbestçe kombinlenebilir.
+
+### Sıralama — `GET /api/cars?sortBy=&order=`
+
+`sortBy` verilmezse liste marka+model'e göre alfabetik sıralanır (DB seviyesinde
+`ORDER BY` + `LIMIT`/`OFFSET`, katalog boyutundan bağımsız ucuz). `sortBy` değerleri:
+`score`, `ncapStars`, `communityScore`, `fuelConsumption`. Bu dördü verildiğinde eşleşen
+**tüm** satırlar çekilip bellekte sıralanıp öyle sayfalanıyor
+([CarRepository.kt](src/main/kotlin/com/arabaskor360/cars/CarRepository.kt)) —
+`communityScore`/`fuelConsumption` SQL kolonu değil, sırasıyla `user_car_review` ve
+`vca_fuel_consumption`'dan agregasyon, DB seviyesinde `ORDER BY`'a sokmak için sorguyu
+yeniden yapılandırmak gerekirdi; katalog şu an birkaç yüz satır olduğu için bellekte
+sıralamak sorun değil, katalog büyüklüğü gerçek bir darboğaz haline gelirse yeniden
+değerlendirilmeli.
+
+`order` verilmezse her `sortBy` kendi "en iyi önce" yönünü kullanır: `score`/`ncapStars`/
+`communityScore` için azalan (yüksek=iyi), `fuelConsumption` için **artan** (düşük
+L/100km=iyi) — `order=asc`/`desc` ile bu varsayılan ezilebilir. Puanı/veri noktası olmayan
+araçlar (`score`/`ncapRating`/`communityScore`/`bestFuelConsumptionL100km` null) her iki
+yönde de **her zaman en sona** düşer — "veri yok" ne "en iyi" ne "en kötü" demek değil.
+
+**`bestFuelConsumptionL100km`** — jenerasyonun sunduğu motorlar arasında **en düşük**
+kombine L/100km (`vca_fuel_consumption`'dan `MIN`), farklı motorların ortalaması değil
+(bkz. Kadjar'daki motor karıştırma hatası düzeltmesi — aynı prensip burada da geçerli:
+gerçek olmayan bir "ortalama motor" üretmek yerine gerçekten var olan en verimli motoru
+gösteriyoruz). Elektrikli-only jenerasyonlarda (`metric_combined_l_per_100km` kaynak
+tabloda tamamen null) bu alan `null` kalır. Hem listede hem detayda dolu (score/ncapRating
+gibi ucuz bir agregasyon, `costOfOwnership`'in aksine).
+
+**Yürütme maliyetine göre sıralama bilerek sunulmuyor.** `costOfOwnership` liste
+endpoint'inde hiç hesaplanmıyor (bkz. `CarResponse.costOfOwnership` doc comment) —
+gerçek bir tescil yılı/yıllık km gerektiriyor ve her satır için ekstra birkaç DB
+sorgusu (VCA yakıt, kasko_deger ILIKE, value history + döviz kuru join) demek; 50-200
+satırlık bir listede bunu hesaplamak `/api/cars`'ı ciddi yavaşlatırdı. Kullanıcı önce
+skor/NCAP/topluluk skoruna göre sırala, sonra detay sayfasında (`GET /api/cars/{id}`)
+gerçek maliyeti görsün mantığı tercih edildi.
 
 ### Dil desteği — `?lang=tr|en`
 
@@ -164,6 +215,47 @@ olarak NEDC'den ~%10-20 daha yüksek tüketim raporlar. Elektrikli araçlar içi
 `null` döner (ayrı kW bazlı MTV tarifesi henüz transcribe edilmedi) — sessizce yanlış bir sayı
 üretmek yerine `notes` alanında açıklanır.
 
+**`GET /api/cars` ve `GET /api/cars/{id}` artık tamamen bir bellek içi cache'ten
+serviliyor** ([CarCache.kt](src/main/kotlin/com/arabaskor360/cars/CarCache.kt)) — sadece
+`costOfOwnership` değil, `score`/`confidence`/`ncapRating`/`bestFuelConsumptionL100km`
+dahil tüm response denormalize edilip `(araç id, dil)` anahtarlı tek bir Map'te tutuluyor.
+İki uç nokta zaten aynı veriyi döndürüyordu (biri tekil eleman, biri filtrelenmiş/
+sıralanmış/sayfalanmış liste) — artık ikisi de bu tek cache'i okuyor,
+`CarRepository`'nin filtreleme/sıralama SQL'i kalktı, `list()` artık `q`/`make`/
+`minYear`/`maxYear`/`sortBy`'ı zaten bellekte olan `CarResponse` nesneleri üzerinde
+Kotlin'de uyguluyor.
+
+Cache saat başı toptan yenileniyor — buradaki her alan zaten sadece loader'ın periyodik
+ingest'leriyle ya da aylık bir cron'la değişiyor, bir saatlik bayatlık sorun değil.
+**Tek istisna:** `communityScore`/`communityCategoryScores`/`communityReviewCount` —
+bunlar bu uygulamanın kendi canlı review akışıyla (`POST`/`DELETE
+/api/cars/{id}/reviews/me`) anında değişebiliyor. Saatlik toptan yenilemeyi beklemek
+yerine, `ReviewController` her başarılı review yazımından hemen sonra
+`CarCache.patchCommunityStats(carId)` çağırıp **sadece o aracın** topluluk alanlarını
+cache'te güncelliyor (ucuz bir tek `GROUP BY` sorgusu + tek bir map girdisi değişimi) —
+DB'ye yazma davranışı aynen duruyor, cache ayrıca senkron tutuluyor.
+
+Cache `ConcurrentHashMap` değil, `@Volatile` bir referans arkasındaki **immutable Map**
+(copy-on-write) — okuyucular hiç kilitlenmiyor, toptan yenileme de kısmi-boş bir ara
+duruma düşmeden tek bir atomik referans değişimiyle oluyor (`FuelPriceCache`'le aynı
+desen). Sadece `Lang.TR` (ana pazar) saat başı istekli olarak önceden hesaplanıyor;
+`Lang.EN` ilk İngilizce istekte tembel dolduruluyor (hem tekil `get` hem de `list` için —
+`list` kendi başına eksik dili doldurmadan sadece cache'i filtrelediği için, tam bu
+amaçla ayrı bir `ensureLangPopulated` adımı var). Katalog canlı büyümeye devam ettiği
+için yeni eklenen bir araç da aynı tembel-doldurma yoluyla ilk erişimde cache'e girer,
+bir sonraki saatlik taramayı beklemez.
+
+Uygulama başlarken cache arka planda bir thread'de ısıtılıyor (`Application.kt`) —
+`/health` hemen cevap verir, Railway trafiği bekletmeden yönlendirir; ısınma sürerken
+gelen gerçek istekler aynı kilide takılıp ısınmanın bitmesini bekler (aynı sweep'i
+tekrar tekrar tetiklemez). Canlı ölçüldü: soğuk TR taraması ~60 araç için ~30-35 saniye
+(sadece TR — hem TR hem EN önceden hesaplansaydı iki katına çıkardı, sayısal hesaplama
+dilden bağımsız olduğu için bu boşa iş olurdu), ilk EN isteği de kendi tembel taramasını
+tetikleyip benzer bir süre alıyor, ondan sonrası her iki dilde de ~0.1-0.3 saniye.
+`GET /api/cars/{id}/cost-of-ownership` (caller'ın `registrationYear`/`annualKm`/
+`trValueTl` geçebildiği uç nokta) bu cache'in **dışında** kalır — keyfi parametre
+kombinasyonları cache alanını sınırsız büyütür, o yüzden hep canlı hesaplanır.
+
 **Gruplama anahtarı `(fuelType, testingScheme, engineCapacityCc)` — motor hacmi dahil:**
 Başlangıçta sadece `(fuelType, testingScheme)`'e göre gruplanıyordu; bu, aynı yakıt tipinde
 birden fazla gerçek motoru (ör. Renault Kadjar'ın "Petrol" seçeneği altında hem 1197cc hem
@@ -198,6 +290,15 @@ hepsi sürücü bazlı kişiselleştirilmiş fiyat veriyor). Bu yüzden:
   aynı jenerik aralık** (2026 için ~8.500-16.000₺), model_variant'a özel değil.
 
 İkisi de `notes` alanında "gerçek teklif değildir" diye açıkça işaretlenir.
+
+**Toplam maliyet — `options[].totalWithInsuranceAnnualTl`:** Her `CostOption`, kendi
+`totalAnnualTl`'ine (gerçek MTV+yakıt) `estimatedKaskoAnnualTl` + `estimatedTrafficInsuranceAnnualTl`
+eklenerek "bu motorla bu aracı bir yıl sahiplenmenin toplam maliyeti" aralığını da taşır —
+kullanıcının üç ayrı sayıyı elle toplamasına gerek kalmaz. Kasko/trafik sigortası sadece
+araç değerine bağlı olduğu (motora bağlı değil) için tüm option'larda aynı aralık eklenir,
+sadece MTV+yakıt kısmı motora göre değişir. `estimatedKaskoAnnualTl` `null` ise (TSB
+eşleşmesi yoksa) `totalWithInsuranceAnnualTl` de `null` kalır — eksik bir gerçek maliyet
+kalemini (kasko) sessizce atlayıp "toplam" diye yanıltıcı bir sayı göstermek yerine.
 
 **Araç değeri — `kaskoDegerOptions` (gerçek veri, tahmin değil):** `araba-skor-360-loader`,
 TSB'nin (Türkiye Sigorta Birliği — sigorta şirketlerinin bizzat kasko primi hesaplarken kullandığı

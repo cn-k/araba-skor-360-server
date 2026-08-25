@@ -24,6 +24,12 @@ data class CostOption(
     val fuel: FuelCostInfo?,
     val mtv: MtvInfo?,
     val totalAnnualTl: BigDecimal?,
+    // totalAnnualTl (real MTV+fuel) plus estimatedKaskoAnnualTl and
+    // estimatedTrafficInsuranceAnnualTl folded in — "gerçekten bu arabayı bu motorla bir yıl
+    // sahiplenmenin toplam maliyeti" as a range, since the insurance components are estimates.
+    // Null whenever any input is missing (no totalAnnualTl, or no kasko vehicle value at all) —
+    // never silently drops a real cost component to still show a number.
+    val totalWithInsuranceAnnualTl: EstimateRange?,
     val note: String?,
 )
 

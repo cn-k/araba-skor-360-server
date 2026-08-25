@@ -1,5 +1,6 @@
 package com.arabaskor360.reviews
 
+import com.arabaskor360.cars.CarCache
 import com.arabaskor360.cars.CarRepository
 import com.arabaskor360.common.ApiException
 import com.arabaskor360.common.BadRequestException
@@ -7,6 +8,7 @@ import com.arabaskor360.common.Lang
 import com.arabaskor360.common.NotFoundException
 import com.arabaskor360.common.resolveLang
 import com.arabaskor360.common.t
+import com.arabaskor360.cost.CostOfOwnershipRepository
 import com.arabaskor360.platform.QuotaExceededException
 import com.arabaskor360.platform.UserPlatformClient
 import com.arabaskor360.platform.authorizationHeaderOrThrow
@@ -20,6 +22,7 @@ class ReviewController(
     private val repository: ReviewRepository = ReviewRepository(),
     private val carRepository: CarRepository = CarRepository(),
     private val platformClient: UserPlatformClient = UserPlatformClient(),
+    private val carCache: CarCache = CarCache(carRepository, CostOfOwnershipRepository()),
 ) {
 
     fun list(ctx: Context) {
@@ -75,6 +78,7 @@ class ReviewController(
             rideComfortScore = body.rideComfortScore,
             comment = body.comment?.trim()?.ifBlank { null },
         )
+        carCache.patchCommunityStats(variantId)
         ctx.json(review)
     }
 
@@ -88,6 +92,7 @@ class ReviewController(
                 t(lang, "Bu kullanıcının $variantId için yorumu yok", "No review from this user for car $variantId"),
             )
         }
+        carCache.patchCommunityStats(variantId)
         ctx.status(204)
     }
 

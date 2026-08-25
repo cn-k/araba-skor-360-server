@@ -1,15 +1,13 @@
 package com.arabaskor360.cars
 
+import com.arabaskor360.common.BadRequestException
 import com.arabaskor360.common.NotFoundException
 import com.arabaskor360.common.resolveLang
 import com.arabaskor360.common.t
-import com.arabaskor360.cost.CostOfOwnershipRepository
-import com.arabaskor360.cost.DEFAULT_ANNUAL_KM
 import io.javalin.http.Context
 
 class CarController(
-    private val repository: CarRepository = CarRepository(),
-    private val costOfOwnershipRepository: CostOfOwnershipRepository = CostOfOwnershipRepository(),
+    private val carCache: CarCache,
 ) {
 
     fun list(ctx: Context) {
@@ -17,30 +15,43 @@ class CarController(
         val query = ctx.queryParam("q")
         val limit = (ctx.queryParam("limit")?.toIntOrNull() ?: 50).coerceIn(1, 200)
         val offset = (ctx.queryParam("offset")?.toIntOrNull() ?: 0).coerceAtLeast(0)
-        ctx.json(repository.listCars(query, limit, offset, lang))
+        val sortBy = ctx.queryParam("sortBy")?.let {
+            CarSortBy.fromApiValue(it) ?: throw BadRequestException(
+                t(
+                    lang,
+                    "sortBy şunlardan biri olmalı: ${CarSortBy.entries.joinToString { s -> s.apiValue }}",
+                    "sortBy must be one of: ${CarSortBy.entries.joinToString { s -> s.apiValue }}",
+                ),
+            )
+        }
+        val descending = when (ctx.queryParam("order")?.lowercase()) {
+            "asc" -> false
+            "desc" -> true
+            else -> sortBy?.defaultDescending ?: true
+        }
+        val makes = ctx.queryParam("make")
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotBlank() }
+            ?.takeIf { it.isNotEmpty() }
+        val minYear = ctx.queryParam("minYear")?.let {
+            it.toIntOrNull() ?: throw BadRequestException(t(lang, "minYear bir tam sayı olmalı", "minYear must be an integer"))
+        }
+        val maxYear = ctx.queryParam("maxYear")?.let {
+            it.toIntOrNull() ?: throw BadRequestException(t(lang, "maxYear bir tam sayı olmalı", "maxYear must be an integer"))
+        }
+        if (minYear != null && maxYear != null && minYear > maxYear) {
+            throw BadRequestException(t(lang, "minYear, maxYear'dan büyük olamaz", "minYear cannot be greater than maxYear"))
+        }
+        ctx.json(carCache.list(query, makes, minYear, maxYear, sortBy, descending, limit, offset, lang))
     }
 
     fun get(ctx: Context) {
         val lang = ctx.resolveLang()
         val id = ctx.pathParam("id").toIntOrNull()
             ?: throw NotFoundException(t(lang, "Geçersiz araç id'si", "Invalid car id"))
-        val car = repository.getCar(id, lang)
+        val car = carCache.get(id, lang)
             ?: throw NotFoundException(t(lang, "Araç bulunamadı: $id", "Car $id not found"))
-
-        // Cost of ownership needs a real car's registration year/mileage, which we don't have —
-        // use sensible defaults (generation start year, 15,000 km/year) so the detail page gets
-        // it in one call. Callers who know the buyer's actual car should hit
-        // /api/cars/{id}/cost-of-ownership directly with their own registrationYear/annualKm.
-        val costOfOwnership = costOfOwnershipRepository.getCostOfOwnership(
-            modelVariantId = id,
-            make = car.make,
-            kaskoTipSearchTerm = car.trName ?: car.model,
-            registrationYear = car.yearStart,
-            annualKm = DEFAULT_ANNUAL_KM,
-            trValueTl = null,
-            lang = lang,
-        )
-
-        ctx.json(car.copy(costOfOwnership = costOfOwnership))
+        ctx.json(car)
     }
 }

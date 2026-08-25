@@ -39,9 +39,30 @@ paths:
         - $ref: "#/components/parameters/Lang"
         - name: q
           in: query
-          description: Marka/model üzerinde serbest metin arama
+          description: Marka/model üzerinde serbest metin arama (substring, marka+model ile birlikte kullanılabilir)
           schema:
             type: string
+        - name: make
+          in: query
+          description: >
+            Tam marka eşleşmesi (case-insensitive, q'nun aksine substring değil) — virgülle
+            birden fazla marka verilebilir (ör. "Renault,BMW"). q ile birlikte kullanılırsa
+            ikisi AND'lenir (ör. make=Renault&q=clio → sadece Renault Clio'lar).
+          schema:
+            type: string
+        - name: minYear
+          in: query
+          description: >
+            Jenerasyonun [yearStart, yearEnd] aralığı bu değerle KESİŞİYORSA eşleşir
+            (yearEnd >= minYear) — sadece minYear'da başlayanlar değil. maxYear ile
+            birlikte verilirse ikisi bir aralık kesişimi oluşturur.
+          schema:
+            type: integer
+        - name: maxYear
+          in: query
+          description: Jenerasyonun yearStart <= maxYear olmasını ister — bkz. minYear açıklaması
+          schema:
+            type: integer
         - name: limit
           in: query
           schema:
@@ -55,6 +76,28 @@ paths:
             type: integer
             default: 0
             minimum: 0
+        - name: sortBy
+          in: query
+          description: >
+            Verilmezse marka+model'e göre alfabetik sıralanır (varsayılan, DB seviyesinde
+            ucuz). Verilirse tüm eşleşen satırlar önce çekilip bellekte sıralanır (katalog
+            şu an birkaç yüz satır olduğu için sorun değil) — puanı/veri noktası olmayan
+            araçlar her zaman en sona düşer (ne artan ne azalanda "en iyi" ya da "en kötü"
+            sayılmazlar). costOfOwnership burada YOK — liste uç noktasında hiç
+            hesaplanmıyor (bkz. Car şemasındaki costOfOwnership açıklaması), o yüzden ona
+            göre sıralama sunulmuyor.
+          schema:
+            type: string
+            enum: [score, ncapStars, communityScore, fuelConsumption]
+        - name: order
+          in: query
+          description: >
+            Verilmezse her sortBy kendi "en iyi önce" yönünü kullanır: score/ncapStars/
+            communityScore için azalan (yüksek=iyi), fuelConsumption için artan (düşük
+            L/100km=iyi). "asc" ya da "desc" ile bu varsayılan ezilebilir.
+          schema:
+            type: string
+            enum: [asc, desc]
       responses:
         "200":
           description: Araç listesi
@@ -64,6 +107,8 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/Car"
+        "400":
+          $ref: "#/components/responses/BadRequest"
 
   /api/cars/{id}:
     get:
@@ -355,6 +400,14 @@ components:
             Review'lardaki opsiyonel detay kategorilerinin (bkz. ReviewRequest) topluluk
             ortalamaları. Her kategori kendi count'unu taşır çünkü kategoriler opsiyonel —
             communityReviewCount ile aynı örneklem büyüklüğüne dayandığı varsayılmamalı.
+        bestFuelConsumptionL100km:
+          type: number
+          nullable: true
+          description: >
+            Bu jenerasyonun sunduğu motorlar arasında en düşük (en verimli) kombine
+            L/100km değeri (vca_fuel_consumption'dan MIN) — farklı motorların ortalaması
+            DEĞİL, sadece en iyi gerçek motor. Elektrikli-only jenerasyonlarda veya VCA
+            verisi hiç yoksa null.
         ncapRating:
           $ref: "#/components/schemas/NcapRating"
           nullable: true
@@ -595,7 +648,16 @@ components:
         totalAnnualTl:
           type: number
           nullable: true
-          description: mtv.annualTl + fuel.annualCostTl (ikisi de doluysa)
+          description: mtv.annualTl + fuel.annualCostTl (ikisi de doluysa) — sadece GERÇEK MTV+yakıt, sigorta dahil değil
+        totalWithInsuranceAnnualTl:
+          $ref: "#/components/schemas/EstimateRange"
+          nullable: true
+          description: >
+            totalAnnualTl + estimatedKaskoAnnualTl + estimatedTrafficInsuranceAnnualTl — bu
+            motorla aracı bir yıl sahiplenmenin (vergi+yakıt+kasko+trafik sigortası) toplam
+            maliyeti, aralık olarak (kasko/trafik tahmini olduğu için). totalAnnualTl ya da
+            estimatedKaskoAnnualTl'den biri eksikse (ör. TSB eşleşmesi yoksa) null döner —
+            eksik bir gerçek maliyet kalemini sessizce atlayıp yanıltıcı bir toplam gösterilmez.
         note:
           type: string
           nullable: true

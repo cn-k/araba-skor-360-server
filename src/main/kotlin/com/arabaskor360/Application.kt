@@ -1,6 +1,8 @@
 package com.arabaskor360
 
+import com.arabaskor360.cars.CarCache
 import com.arabaskor360.cars.CarController
+import com.arabaskor360.cars.CarRepository
 import com.arabaskor360.common.ApiException
 import com.arabaskor360.common.BadRequestException
 import com.arabaskor360.common.NotFoundException
@@ -31,13 +33,28 @@ private fun loadOpenApiSpec(): String =
 fun main() {
     AppDatabase.init()
 
-    // Shared across both controllers so there's a single FuelPriceCache instance (and thus a
-    // single daily external fuel-price fetch) for the whole process, not one per controller.
+    // Shared across controllers so there's a single FuelPriceCache instance (and thus a single
+    // daily external fuel-price fetch), and a single CarCache instance (see its doc comment —
+    // CarController reads/lists from it, ReviewController patches it after every review write)
+    // for the whole process, not one per controller.
+    val carRepository = CarRepository()
     val costOfOwnershipRepository = CostOfOwnershipRepository()
-    val carController = CarController(costOfOwnershipRepository = costOfOwnershipRepository)
-    val reviewController = ReviewController()
+    val carCache = CarCache(carRepository, costOfOwnershipRepository)
+    val carController = CarController(carCache = carCache)
+    val reviewController = ReviewController(carRepository = carRepository, carCache = carCache)
     val costOfOwnershipController = CostOfOwnershipController(repository = costOfOwnershipRepository)
     val openApiSpec = loadOpenApiSpec()
+
+    // Warms the cache in the background so the first real request doesn't pay for a full sweep
+    // (measured ~65s cold for ~60 cars — now roughly half that since only Lang.TR is precomputed
+    // eagerly) — /health responds immediately regardless, so Railway routes traffic before this
+    // finishes; early requests may still hit a live per-car computation via CarCache.get's miss
+    // fallback until the sweep completes.
+    Thread(carCache::warmUp).apply {
+        isDaemon = true
+        name = "car-cache-warmup"
+        start()
+    }
 
     val app = Javalin.create { config ->
         config.jsonMapper(JavalinJackson(sharedObjectMapper, false))
