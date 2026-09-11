@@ -319,6 +319,20 @@ değiştiren bir karar, ileride konuşulabilir. TSB dosyası aylık güncellendi
 `araba-skor-360-loader`'da `python -m carscore_ingest.kasko_deger_ingest` de aylık tekrar
 çalıştırılmalı.
 
+**Eski anlık görüntülere düşme (fallback):** TSB'nin listesi her zaman sadece **son ~15
+model yılını** kapsıyor (TSB'nin kendi politikası — bundan daha eski araçlar standart
+kasko tablosuyla değil ekspertizle değerleniyor). Bu yüzden bir araç, geçen seneki
+anlık görüntüde varken bu seneki **en güncel** anlık görüntüden düşebiliyor — canlı DB'de
+doğrulandı: 2011 model bir Ford Focus, 2020-2025 arası her Ağustos anlık görüntüsünde
+gerçek eşleşmeye sahipken, 2026-08 anlık görüntüsünde yok (tam 15 yaşına bastığı an
+listeden çıkmış). `lookupKaskoDeger` artık sadece en güncel anlık görüntüye bakmıyor —
+eşleşme bulana kadar (yıldan yıla, en güncelden en eskiye) elimizdeki **tüm** anlık
+görüntüleri deniyor, bulduğu ilk (en güncel) gerçek eşleşmeyi kullanıyor ve `notes`'a
+hangi anlık görüntüye düştüğünü açıkça yazıyor. Bu, aynı `model_year` için farklı bir
+anlık görüntüye bakmak — bir önceki maddedeki "TSB'de o model_year hiç yok" durumundan
+(ör. Passat'ın 2014'ü, hiçbir anlık görüntüde bulunmuyor) farklı bir sorunu çözüyor;
+o durum için hâlâ bir çözüm yok (kaynağın kendisinde araştırılıyor).
+
 **Değer geçmişi — `valueHistory` (longitudinal, gerçek zaman serisi):** `araba-skor-360-loader`
 artık `kasko_deger`'i tek aylık anlık görüntü değil, **her yıl Ağustos ayı için geriye dönük**
 (2020-08-01'den 2026-08-01'e, 7 snapshot) ingest ediyor. `computeValueHistory`

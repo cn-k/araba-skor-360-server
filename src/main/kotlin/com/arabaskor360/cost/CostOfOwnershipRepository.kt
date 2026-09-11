@@ -17,7 +17,6 @@ import org.jetbrains.exposed.v1.core.isNull
 import org.jetbrains.exposed.v1.core.lessEq
 import org.jetbrains.exposed.v1.core.like
 import org.jetbrains.exposed.v1.core.lowerCase
-import org.jetbrains.exposed.v1.core.max
 import org.jetbrains.exposed.v1.core.or
 import org.jetbrains.exposed.v1.jdbc.select
 import org.jetbrains.exposed.v1.jdbc.selectAll
@@ -108,7 +107,7 @@ class CostOfOwnershipRepository(
             notes += t(lang, "Bu araç için VCA yakıt tüketimi verisi bulunamadı.", "No VCA fuel consumption data found for this car.")
         }
 
-        val kaskoDegerOptions = lookupKaskoDeger(make, kaskoTipSearchTerm, registrationYear)
+        val kaskoDegerOptions = lookupKaskoDeger(make, kaskoTipSearchTerm, registrationYear, notes, lang)
         if (kaskoDegerOptions.isEmpty()) {
             notes += t(
                 lang,
@@ -307,36 +306,71 @@ class CostOfOwnershipRepository(
         )
     }
 
-    /** Kotlin port of cost_of_ownership.py's get_kasko_deger(): ILIKE substring match on make/trim
-     *  plus an exact model year, against the latest landed TSB snapshot. Returns every match
-     *  (0, 1, or several — a generation covers many trims) rather than picking one, same
-     *  disclosed-list philosophy as the VCA-derived `options`. */
-    private fun lookupKaskoDeger(make: String, tipSearchTerm: String, modelYear: Int): List<KaskoDegerOption> {
-        val maxSnapshot = KaskoDegerTable.snapshotMonth.max()
-        val latestMonth = KaskoDegerTable.select(maxSnapshot).singleOrNull()?.get(maxSnapshot)
-            ?: return emptyList()
+    /** Kotlin port of cost_of_ownership.py's get_kasko_deger(): ILIKE substring match on
+     *  make/trim plus an exact model year. Tries every ingested snapshot_month, newest first,
+     *  and returns the first one with a match — not just the single latest snapshot.
+     *
+     *  Why: TSB's own list only ever covers roughly the most recent 15 model years, so a car can
+     *  "age out" of the CURRENT snapshot while still having real data in an older one we already
+     *  ingested — verified live: a 2011 Ford Focus has real matches in every snapshot from
+     *  2020-08 through 2025-08, but is absent from the newest 2026-08 one (it just turned 15).
+     *  Falling back to that older, still-real snapshot is more honest than reporting "no TSB
+     *  match" when we're sitting on the actual number, just dated by up to a year — disclosed via
+     *  `notes` when it happens. Returns every match (0, 1, or several — a generation covers many
+     *  trims) rather than picking one, same disclosed-list philosophy as the VCA-derived
+     *  `options`. */
+    private fun lookupKaskoDeger(
+        make: String,
+        tipSearchTerm: String,
+        modelYear: Int,
+        notes: MutableList<String>,
+        lang: Lang,
+    ): List<KaskoDegerOption> {
+        val snapshotMonths = KaskoDegerTable
+            .select(KaskoDegerTable.snapshotMonth)
+            .groupBy(KaskoDegerTable.snapshotMonth)
+            .orderBy(KaskoDegerTable.snapshotMonth to SortOrder.DESC)
+            .map { it[KaskoDegerTable.snapshotMonth] }
+        if (snapshotMonths.isEmpty()) return emptyList()
 
         val makePattern = "%${make.trim().lowercase()}%"
         val tipPattern = "%${tipSearchTerm.trim().lowercase()}%"
 
-        return KaskoDegerTable.selectAll()
-            .where {
-                (KaskoDegerTable.snapshotMonth eq latestMonth) and
-                    (KaskoDegerTable.markaAdi.lowerCase() like makePattern) and
-                    (KaskoDegerTable.tipAdi.lowerCase() like tipPattern) and
-                    (KaskoDegerTable.modelYear eq modelYear)
+        for ((index, month) in snapshotMonths.withIndex()) {
+            val matches = KaskoDegerTable.selectAll()
+                .where {
+                    (KaskoDegerTable.snapshotMonth eq month) and
+                        (KaskoDegerTable.markaAdi.lowerCase() like makePattern) and
+                        (KaskoDegerTable.tipAdi.lowerCase() like tipPattern) and
+                        (KaskoDegerTable.modelYear eq modelYear)
+                }
+                .map { row ->
+                    KaskoDegerOption(
+                        tipKodu = row[KaskoDegerTable.tipKodu],
+                        make = row[KaskoDegerTable.markaAdi],
+                        trim = row[KaskoDegerTable.tipAdi],
+                        modelYear = row[KaskoDegerTable.modelYear],
+                        valueTl = row[KaskoDegerTable.valueTl],
+                        snapshotMonth = row[KaskoDegerTable.snapshotMonth],
+                        source = row[KaskoDegerTable.sourceLabel],
+                    )
+                }
+            if (matches.isNotEmpty()) {
+                if (index > 0) {
+                    notes += t(
+                        lang,
+                        "'$make $tipSearchTerm' ($modelYear model yılı) en güncel TSB anlık görüntüsünde " +
+                            "bulunamadı (muhtemelen ~15 yıllık takip aralığının dışına çıktı) — en son " +
+                            "mevcut olan $month anlık görüntüsündeki gerçek değer kullanıldı.",
+                        "No match for '$make $tipSearchTerm' (model year $modelYear) in the latest TSB " +
+                            "snapshot (likely aged out of the ~15-year tracking window) — used the most " +
+                            "recent snapshot that still has it, $month.",
+                    )
+                }
+                return matches
             }
-            .map { row ->
-                KaskoDegerOption(
-                    tipKodu = row[KaskoDegerTable.tipKodu],
-                    make = row[KaskoDegerTable.markaAdi],
-                    trim = row[KaskoDegerTable.tipAdi],
-                    modelYear = row[KaskoDegerTable.modelYear],
-                    valueTl = row[KaskoDegerTable.valueTl],
-                    snapshotMonth = row[KaskoDegerTable.snapshotMonth],
-                    source = row[KaskoDegerTable.sourceLabel],
-                )
-            }
+        }
+        return emptyList()
     }
 
     /** For each distinct trim that matched at registrationYear, pulls that EXACT (marka_adi,

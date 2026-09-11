@@ -502,6 +502,10 @@ components:
             birden çok satır dönebilir — bir nesil birden fazla trim içerir, bu yüzden
             tekil bir sayıya indirgenmez. trValueTl verilmezse estimatedKaskoAnnualTl bu
             listenin ortalamasını kullanır (MTV değer bandı hesabına hâlâ bağlı değil).
+            En güncel TSB anlık görüntüsünde eşleşme yoksa (araç TSB'nin ~15 yıllık takip
+            aralığından çıkmış olabilir) elimizdeki daha eski anlık görüntülere düşülür —
+            bu durumda `notes`'a hangi anlık görüntünün kullanıldığı açıkça yazılır,
+            `snapshotMonth` da o eski tarihi taşır.
         valueHistory:
           type: array
           items:
